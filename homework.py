@@ -4,10 +4,10 @@ import time
 import sys
 from http import HTTPStatus
 
+from dotenv import load_dotenv
 import requests
 import telegram
 
-from dotenv import load_dotenv
 from exceptions import (SendMessageFailException,
                         HomeworkOrTimestampException, HTTPStatusNotOKException)
 
@@ -31,22 +31,12 @@ HOMEWORK_VERDICTS = {
     'rejected': 'Работа проверена: у ревьюера есть замечания.'
 }
 
-if __name__ == '__main__':
-    logging.basicConfig(
-        level=logging.DEBUG,
-        filename='homework.log',
-        format=('%(asctime)s - %(levelname)s '
-                '- %(message)s - %(funcName)s - %(lineno)d')
-    )
-
 
 def check_tokens():
     """Проверить доступность переменных окружения."""
     logging.info('Начало проверки доступности переменных окружения')
-    tokens = all([PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID])
-    if tokens is False:
-        logging.critical('Переменные окружения недоступны')
-        sys.exit('Переменные окружения недоступны')
+    tokens = [PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID]
+    return all(tokens)
 
 
 def send_message(bot, message):
@@ -74,13 +64,12 @@ def get_api_answer(timestamp):
         raise HomeworkOrTimestampException(
             f'Сбой при запросе к эндпоинту: {error}'
         )
-    if response.status_code == HTTPStatus.OK:
-        response = response.json()
-        return response
-    else:
+    if response.status_code != HTTPStatus.OK:
         raise HTTPStatusNotOKException(
             f'Ошибка! Код ответа сервера: {response.status_code}'
         )
+    response = response.json()
+    return response
 
 
 def check_response(response):
@@ -116,29 +105,40 @@ def parse_status(homework):
 
 def main():
     """Основная логика работы бота."""
-    check_tokens()
+    if check_tokens() is False:
+        logging.critical('Переменные окружения недоступны')
+        sys.exit('Переменные окружения недоступны')
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
     timestamp = timestamp - RETRY_PERIOD
+    prev_status = ''
 
     while True:
         try:
             response = get_api_answer(timestamp)
             check_response(response)
             homeworks = response['homeworks']
-            if homeworks:
-                homework = homeworks[0]
-                message = parse_status(homework)
-                send_message(bot, message)
+            homework = homeworks[0]
+            current_status = parse_status(homework)
+            if current_status != prev_status:
+                send_message(bot, current_status)
             else:
                 logging.debug('Статус не изменился')
+                prev_status = current_status
             timestamp = response['current_date']
         except Exception as error:
-            logging.error(error)
+            logging.error(error, exc_info=True)
             message = f'Сбой в работе программы: {error}'
+            send_message(bot, message)
         finally:
             time.sleep(RETRY_PERIOD)
 
 
 if __name__ == '__main__':
     main()
+    logging.basicConfig(
+        level=logging.DEBUG,
+        filename='homework.log',
+        format=('%(asctime)s - %(levelname)s '
+                '- %(message)s - %(funcName)s - %(lineno)d')
+    )
